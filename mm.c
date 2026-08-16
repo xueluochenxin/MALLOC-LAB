@@ -58,11 +58,12 @@ team_t team = {
 #define HDRP(bp) ((char *)(bp) - WSIZE)
 #define FTRP(bp) ((char *)(bp) + GET_SIZE(HDRP(bp)) - DSIZE)
 
-#define NEXT_BLKP(bp) ((char*)(bp)+GET_SIZE((char*)(bp)-WSIZE))
-#define PREV_BLKP(bp) ((char*)(bp)-GET_SIZE((char*)(bp)-DSIZE))
+#define NEXT_BLKP(bp) ((char*)(bp)+GET_SIZE((char*)(bp)-WSIZE))//指向下一块的payload
+#define PREV_BLKP(bp) ((char*)(bp)-GET_SIZE((char*)(bp)-DSIZE))//指向前一块的payload
 
 
-
+//变量声明
+static char* heap_listp; //指向堆中第一个空闲块的指针
 
 
 
@@ -76,9 +77,75 @@ team_t team = {
  */
 int mm_init(void)
 {
-    return 0;
-}
+    if((heap_listp=mem_sbrk(4*WSIZE))==(void*) -1)
+    {
+        return -1;
+    }
+    PUT(heap_listp,0);
+    PUT(heap_listp+WSIZE,PACK(DSIZE,1));//序言块头
+    PUT(heap_listp+DSIZE,PACK(DSIZE,1));//序言块foot
+    PUT(heap_listp+3*WSIZE,PACK(0,1));//结尾块 大小0 a=1
+    heap_listp+=(2*WSIZE);
 
+    if(extend_heap(CHUNKSIZE/WSIZE)==NULL)
+    {
+        return -1;
+    }
+    else
+    {
+        return 0;
+    }
+}
+static void *extend_heap(size_t words)//words含义是带有多少个WSIZE
+{
+   char *bp;
+   size_t size;
+
+   size=(words%2)?(words+1)*WSIZE:words*WSIZE;
+   
+   if((bp=mem_sbrk(size))==(void *)-1)
+   {
+    return NULL;
+   }
+   
+   PUT(HDRP(bp),PACK(size,0));
+   PUT(FTRP(bp),PACK(size,0));
+   PUT(NEXT_BLKP(bp),PACK(0,1));
+
+   return coalesce(bp);//合并后首地址可能变了，所以我们必须返回合并后的首地址
+}
+static void* coalesce(char* bp)
+{
+  size_t prev_alloc= GET_ALLOC(FTRP(PREV_BLKP(bp)));
+  size_t next_alloc= GET_ALLOC(HDRP(NEXT_BLKP(bp)));
+  size_t size=GET_SIZE(HDRP(bp));
+
+  if(prev_alloc&&next_alloc)//前后都已分配
+  {
+    return bp;
+  }
+  else if(prev_alloc&&!next_alloc)//前分配 后空闲
+  {
+    size+= GET_SIZE(HDRP(NEXT_BLKP(bp)));
+    PUT(HDRP(bp),PACK(size,0));//先修改head，这样后面用FTRP得到的foot就是合并块的foot
+    PUT(FTRP(bp),PACK(size,0));
+  }
+  else if(!prev_alloc&&next_alloc)//前空闲，后分配
+  {
+    size+=GET_SIZE(FTRP(PREV_BLKP(bp)));
+    PUT(FTRP(bp),PACK(size,0));
+    PUT(HDRP(PREV_BLKP(bp)),PACK(size,0));
+    bp=PREV_BLKP(bp);
+  }
+  else if(!prev_alloc&&!next_alloc)//前后都空闲
+  {
+     size+=GET_SIZE(HDRP(NEXT_BLKP(bp)))+GET_SIZE(FTRP(PREV_BLKP(bp)));
+     PUT(HDRP(PREV_BLKP(bp)),PACK(size,0));
+     PUT(FTRP(NEXT_BLKP(bp)),PACK(size,0));
+     bp=PREV_BLKP(bp);
+  }
+  return bp;
+}
 /* 
  * mm_malloc - Allocate a block by incrementing the brk pointer.
  *     Always allocate a block whose size is a multiple of the alignment.
@@ -100,6 +167,12 @@ void *mm_malloc(size_t size)
  */
 void mm_free(void *ptr)
 {
+    if(ptr==NULL) return;
+    size_t size=GET_SIZE(HDRP(ptr));
+    
+    PUT(HDRP(ptr),PACK(size,0));
+    PUT(FTRP(ptr),PACK(size,0));
+    coalesce(ptr);
 }
 
 /*
