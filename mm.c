@@ -24,11 +24,11 @@
  ********************************************************/
 team_t team = {
     /* Team name */
-    "ateam",
+    "team xlcx",
     /* First member's full name */
-    "Harry Bovik",
+    "xueluochenxin",
     /* First member's email address */
-    "bovik@cs.cmu.edu",
+    "xueluochenxin666@gamail.com",
     /* Second member's full name (leave blank if none) */
     "",
     /* Second member's email address (leave blank if none) */
@@ -42,7 +42,34 @@ team_t team = {
 #define ALIGN(size) (((size) + (ALIGNMENT-1)) & ~0x7)
 
 
-#define SIZE_T_SIZE (ALIGN(sizeof(size_t)))
+#define SIZE_T_SIZE (ALIGN(sizeof(size_t)))//对齐用的
+
+//my define
+#define WSIZE 4
+#define DSIZE 8
+#define CHUNKSIZE (1<<12)
+#define MAX(x,y) ((x)>(y)?(x):(y))
+#define PACK(size,alloc) ((size)|(alloc))
+#define GET(p) (*(unsigned int*)(p))
+#define PUT(p,val) (*(unsigned int *)(p)=(val))
+#define GET_SIZE(p) (GET(p)& ~0x7)  //getsize得到的是payload+head+foot的size
+#define GET_ALLOC(p) (GET(p) & 0x1)
+
+#define HDRP(bp) ((char *)(bp) - WSIZE)
+#define FTRP(bp) ((char *)(bp) + GET_SIZE(HDRP(bp)) - DSIZE)
+
+#define NEXT_BLKP(bp) ((char*)(bp)+GET_SIZE((char*)(bp)-WSIZE))
+#define PREV_BLKP(bp) ((char*)(bp)-GET_SIZE((char*)(bp)-DSIZE))
+
+
+
+
+
+
+
+
+
+
 
 /* 
  * mm_init - initialize the malloc package.
