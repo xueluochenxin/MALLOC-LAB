@@ -152,16 +152,67 @@ static void* coalesce(char* bp)
  */
 void *mm_malloc(size_t size)
 {
-    int newsize = ALIGN(size + SIZE_T_SIZE);
-    void *p = mem_sbrk(newsize);
-    if (p == (void *)-1)
-	return NULL;
-    else {
-        *(size_t *)p = size;
-        return (void *)((char *)p + SIZE_T_SIZE);
-    }
-}
+   if(size==0)
+   {
+    return NULL;
+   }
+   size_t asize;
+   size_t expandsize;
+   char *bp;
+   
+   if(size<DSIZE)
+   {
+    asize=2*DSIZE;
+   }
+   else
+   {
+    asize=DSIZE*((size+(DSIZE)+(DSIZE-1))/DSIZE);
+   }
 
+   //查找
+   if((bp=find_fit(asize))!=NULL) //首次适配
+   {
+    place(bp,asize);
+   }
+   //没找到
+   expandsize= MAX(asize,CHUNKSIZE);
+   if((bp=extend_heap(expandsize/WSIZE) )==NULL)
+   {
+    return NULL;
+   }
+   place(bp,asize);
+   return bp;
+}
+static void* find_fit(size_t asize) //首次适配
+{
+    char *ptr=heap_listp;
+    for(ptr;GET_SIZE(HDRP(ptr))>0;ptr=NEXT_BLKP(ptr))
+    {
+        if( asize<=GET_SIZE(HDRP(ptr)) && !GET_ALLOC(HDRP(ptr)))
+        {
+            return ptr;
+        }
+    }
+    return NULL;
+}
+static void place(void* bp,size_t asize)
+{
+  size_t size=GET_SIZE(HDRP(bp));
+  if(size-asize>DSIZE)//给剩余块放置头部和尾部
+  {
+     PUT(HDRP(bp),PACK(asize,1));
+     PUT(FTRP(bp),PACK(asize,1));
+
+     bp=NEXT_BLKP(bp);
+     PUT(HDRP(bp),PACK(size-asize,0));
+     PUT(FTRP(bp),PACK(size-asize,0));
+  }
+  else//全分配给当前的指针，作为一个大块
+  {
+      PUT(HDRP(bp),PACK(asize,1));
+      PUT(FTRP(bp),PACK(asize,1));
+  }
+}
 /*
  * mm_free - Freeing a block does nothing.
  */
