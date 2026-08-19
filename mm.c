@@ -61,6 +61,7 @@ team_t team = {
 #define PREV_BLKP(bp) ((char*)(bp)-GET_SIZE((char*)(bp)-DSIZE))//指向前一块的payload
 
 
+
 //变量声明
 static char* heap_listp; //指向堆中第一个空闲块的指针 位置是序言块的foot
 
@@ -69,11 +70,62 @@ static void* coalesce(char* bp);
 static void* find_fit(size_t asize);
 static void place(void* bp, size_t asize);
 
+//分离链表的新增宏
+#define PREV(bp) (*(void**)(bp))   //前一个块的地址
+#define NEXT(bp) (*(void**)((char*)bp +DSIZE))
+#define LISTSIZE 16
+#define MIN_BLOCKSIZE 24
+static void* freelist[LISTSIZE];   //0-16  17-32 33-64
+
+static int find_index(size_t size);
+static void insert_block(void* bp);
+static void remove_block(void* bp);
 
 
 
-
-
+static int find_index(size_t size)
+{
+   int index=0;
+   if(size<=16)
+   {
+    return 0;
+   }
+   while(index<LISTSIZE-1&&size>16)
+   {
+    index++;
+    size=(size+1)>>1;
+   }
+   return index;
+}
+static void insert_block(void* bp)
+{
+    int index=find_index(GET_SIZE(HDRP(bp)));
+    PREV(bp)=NULL;
+    NEXT(bp)=freelist[index];
+    if(freelist[index]!=NULL)
+    {
+        PREV(freelist[index])=bp;
+    }
+    freelist[index]=bp;
+}
+static void remove_block(void* bp)
+{
+    int index=find_index(GET_SIZE(HDRP(bp)));
+    if(PREV(bp)!=NULL)
+    {
+        NEXT(PREV(bp))=NEXT(bp);
+    }
+    else
+    {
+        freelist[index]=NEXT(bp);
+    }
+    if(NEXT(bp)!=NULL)
+    {
+        PREV(NEXT(bp))=PREV(bp);
+    }
+    PREV(bp)=NULL;
+    NEXT(bp)=NULL;
+}
 /* 
  * mm_init - initialize the malloc package.
  */
@@ -88,15 +140,18 @@ int mm_init(void)
     PUT(heap_listp+DSIZE,PACK(DSIZE,1));//序言块foot
     PUT(heap_listp+3*WSIZE,PACK(0,1));//结尾块 大小0 a=1
     heap_listp+=(2*WSIZE);
-
+    //把数组所有元素设为NULL
+    for(int i=0;i<LISTSIZE;++i)
+    {
+        freelist[i]=NULL;
+    }
+    
     if(extend_heap(CHUNKSIZE/WSIZE)==NULL)
     {
         return -1;
     }
-    else
-    {
-        return 0;
-    }
+    return 0;
+
 }
 static void *extend_heap(size_t words)//words含义是带有多少个WSIZE
 {
@@ -114,7 +169,9 @@ static void *extend_heap(size_t words)//words含义是带有多少个WSIZE
    PUT(FTRP(bp),PACK(size,0));
    PUT(HDRP(NEXT_BLKP(bp)),PACK(0,1));
 
-   return coalesce(bp);//合并后首地址可能变了，所以我们必须返回合并后的首地址
+   bp=coalesce(bp);
+   insert_block(bp);
+   return bp;
 }
 static void* coalesce(char* bp)
 {
@@ -128,12 +185,14 @@ static void* coalesce(char* bp)
   }
   else if(prev_alloc&&!next_alloc)//前分配 后空闲
   {
+    remove_block(NEXT_BLKP(bp));
     size+= GET_SIZE(HDRP(NEXT_BLKP(bp)));
     PUT(HDRP(bp),PACK(size,0));//先修改head，这样后面用FTRP得到的foot就是合并块的foot
     PUT(FTRP(bp),PACK(size,0));
   }
   else if(!prev_alloc&&next_alloc)//前空闲，后分配
   {
+    remove_block(PREV_BLKP(bp));
     size+=GET_SIZE(FTRP(PREV_BLKP(bp)));
     PUT(FTRP(bp),PACK(size,0));
     PUT(HDRP(PREV_BLKP(bp)),PACK(size,0));
@@ -141,6 +200,8 @@ static void* coalesce(char* bp)
   }
   else if(!prev_alloc&&!next_alloc)//前后都空闲
   {
+    remove_block(PREV_BLKP(bp));
+    remove_block(NEXT_BLKP(bp));
      size+=GET_SIZE(HDRP(NEXT_BLKP(bp)))+GET_SIZE(FTRP(PREV_BLKP(bp)));
      PUT(HDRP(PREV_BLKP(bp)),PACK(size,0));
      PUT(FTRP(NEXT_BLKP(bp)),PACK(size,0));
@@ -174,6 +235,7 @@ void *mm_malloc(size_t size)
    //查找
    if((bp=find_fit(asize))!=NULL) //首次适配
    {
+    remove_block(bp);
     place(bp,asize);
     return bp;
    }
@@ -183,25 +245,32 @@ void *mm_malloc(size_t size)
    {
     return NULL;
    }
+   remove_block(bp);
    place(bp,asize);
    return bp;
 }
 static void* find_fit(size_t asize) //首次适配
 {
-    char *ptr=heap_listp;
-    for(ptr;GET_SIZE(HDRP(ptr))>0;ptr=NEXT_BLKP(ptr))
-    {
-        if( asize<=GET_SIZE(HDRP(ptr)) && !GET_ALLOC(HDRP(ptr)))
+   int index=find_index(asize);
+   void* bp;
+   for(int i=index;i<LISTSIZE;++i)
+   {
+     bp=freelist[i];
+     while(bp!=NULL)
+     {
+        if(GET_SIZE(HDRP(bp))>=asize)
         {
-            return ptr;
+            return bp;
         }
-    }
-    return NULL;
+        bp=NEXT(bp);
+     }
+   }
+   return NULL;
 }
 static void place(void* bp,size_t asize)
 {
   size_t size=GET_SIZE(HDRP(bp));
-  if(size-asize>=2*DSIZE)//给剩余块放置头部和尾部
+  if(size-asize>=MIN_BLOCKSIZE)//给剩余块放置头部和尾部
   {
      PUT(HDRP(bp),PACK(asize,1));
      PUT(FTRP(bp),PACK(asize,1));
@@ -209,6 +278,7 @@ static void place(void* bp,size_t asize)
      bp=NEXT_BLKP(bp);
      PUT(HDRP(bp),PACK(size-asize,0));
      PUT(FTRP(bp),PACK(size-asize,0));
+     insert_block(bp);
   }
   else//全分配给当前的指针，作为一个大块
   {
@@ -226,7 +296,8 @@ void mm_free(void *ptr)
     
     PUT(HDRP(ptr),PACK(size,0));
     PUT(FTRP(ptr),PACK(size,0));
-    coalesce(ptr);
+    ptr=coalesce(ptr);
+    insert_block(ptr);
 }
 
 /*
@@ -234,59 +305,39 @@ void mm_free(void *ptr)
  */
 void *mm_realloc(void *ptr, size_t size)
 {
-    size_t oldsize;
-    if(size==0)
-    {
+    if (size == 0) {
         mm_free(ptr);
         return NULL;
     }
-    if(ptr==NULL)
-    {
+    if (ptr == NULL) {
         return mm_malloc(size);
     }
-    oldsize=GET_SIZE(HDRP(ptr));
-    size_t oldpayload=oldsize-DSIZE;
-    size_t asize;
-    if(size<DSIZE)
-    {
-     asize=2*DSIZE;
-    }
-    else
-    {
-     asize=DSIZE*((size+(DSIZE)+(DSIZE-1))/DSIZE);
-    }
-    if(oldpayload>=asize)
-    {
+
+    size_t oldsize = GET_SIZE(HDRP(ptr));
+    size_t asize = (size <= DSIZE) ? 2 * DSIZE : ALIGN(size + DSIZE);
+
+    if (oldsize >= asize) {
         return ptr;
     }
-    else
-    {
-        int flag=GET_ALLOC(HDRP(NEXT_BLKP(ptr)));
-        size_t nextsize=GET_SIZE(HDRP(NEXT_BLKP(ptr)));
-        //如果下一块是空闲的且和当前块合并得到的新payload大于asize
-        if(!flag&&nextsize+oldsize-DSIZE>=size)
-        {
-            size_t new_size=nextsize+oldsize;
-            PUT(HDRP(ptr), PACK(new_size, 1));
-            PUT(FTRP(ptr), PACK(new_size, 1));
-            return ptr;
-        }
-        //无法合并，就重新malloc后复制数据过去
-        else
-        {
-            char * newptr=(char*)mm_malloc(size);
-            if(newptr==NULL)
-            {
-                return NULL;
-            }
-            else
-            {
-                memcpy(newptr,ptr,oldpayload);
-                mm_free(ptr);
-                return newptr;
-            }
-        }
+
+    // 尝试与后一块合并
+    size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(ptr)));
+    size_t nextsize = GET_SIZE(HDRP(NEXT_BLKP(ptr)));
+    if (!next_alloc && (oldsize + nextsize >= asize)) {
+        remove_block(NEXT_BLKP(ptr));
+        size_t new_size = oldsize + nextsize;
+        PUT(HDRP(ptr), PACK(new_size, 1));
+        PUT(FTRP(ptr), PACK(new_size, 1));
+        return ptr;
     }
+
+    // 否则重新分配
+    void *newptr = mm_malloc(size);
+    if (newptr == NULL) return NULL;
+    size_t copy_size = (oldsize - DSIZE < size) ? oldsize - DSIZE : size;
+    memcpy(newptr, ptr, copy_size);
+    mm_free(ptr);
+    return newptr;
 }
 
 
